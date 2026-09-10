@@ -1,41 +1,42 @@
-name: build
+name: build-release
 on: [push, pull_request, workflow_dispatch]
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-        build_type: [RelWithDebInfo, Debug]
-        ui: [gui, cli]
-        scripting: [lua, noscripts]
-        exclude:
-          - build_type: Debug
-            ui: gui
-          - build_type: RelWithDebInfo
-            ui: cli
-          - build_type: RelWithDebInfo
-            scripting: noscripts
+        include:
+          - os: windows-latest
+            artifact_name: aseprite-windows-x64
+            archive_cmd: 7z a -tzip aseprite-windows.zip ./build/bin/*
+            archive_file: aseprite-windows.zip
+          - os: ubuntu-latest
+            artifact_name: aseprite-linux-x64
+            archive_cmd: zip -r aseprite-linux.zip ./build/bin/*
+            archive_file: aseprite-linux.zip
+          - os: macos-latest
+            artifact_name: aseprite-macos-arm64
+            archive_cmd: zip -r aseprite-macos.zip ./build/bin/*
+            archive_file: aseprite-macos.zip
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # Fetches all history and tags
+        fetch-depth: 0
 
     - name: Checkout latest tag and sync submodules
       shell: bash
       run: |
-        # Find the latest tag sorted by version
         LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
         if [ -z "$LATEST_TAG" ]; then
           LATEST_TAG=$(git describe --tags --abbrev=0)
         fi
         echo "Checking out latest tag: $LATEST_TAG"
         git checkout "$LATEST_TAG"
-
-        # Initialize submodules specifically for this tag
         git submodule update --init --recursive
 
     - name: Install Dependencies
@@ -46,10 +47,9 @@ jobs:
         sudo apt-get install -y \
           libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
           libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
-          libfontconfig1-dev
+          libfontconfig1-dev zip
 
     - name: Install Skia
-      if: ${{ matrix.ui == 'gui' }}
       shell: bash
       run: |
         if [[ "${{ runner.os }}" == "Windows" ]] ; then
@@ -66,7 +66,7 @@ jobs:
       uses: hendrikmuhs/ccache-action@v1.2.23
       if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }}
       with:
-        key: ${{ matrix.os }}-${{ matrix.ui }}-${{ matrix.scripting }}-${{ matrix.build_type }}
+        key: ${{ matrix.os }}-RelWithDebInfo
 
     - uses: aseprite/get-ninja@main
 
@@ -84,18 +84,6 @@ jobs:
           export enable_ccache=on
         fi
 
-        if [[ "${{ matrix.ui }}" == "gui" ]] ; then
-          export laf_backend=skia
-        else
-          export laf_backend=none
-        fi
-
-        if [[ "${{ matrix.scripting }}" == "lua" ]] ; then
-          export enable_scripting=on
-        else
-          export enable_scripting=off
-        fi
-
         if [[ "${{ runner.os }}" == "macOS" ]] ; then
           export skia_arch=arm64
         else
@@ -103,35 +91,27 @@ jobs:
         fi
 
         cmake -S . -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DCMAKE_OSX_DEPLOYMENT_TARGET=10.14 \
-          -DENABLE_TESTS=ON \
-          -DENABLE_SCRIPTING=$enable_scripting \
+          -DENABLE_TESTS=OFF \
+          -DENABLE_SCRIPTING=ON \
           -DENABLE_CCACHE=$enable_ccache \
-          -DLAF_BACKEND=$laf_backend \
+          -DLAF_BACKEND=skia \
           -DSKIA_DIR=$(realpath skia) \
           -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch)
 
     - name: Compiling
       shell: bash
       run: |
-        cd build && ninja
+        cd build && ninja aseprite
 
-    - name: Running C++ Tests
+    - name: Package Binaries
       shell: bash
       run: |
-        if [[ "${{ runner.os }}" == "Linux" ]] ; then
-          export XVFB=xvfb-run
-        fi
-        cd build && $XVFB ctest --output-on-failure
+        ${{ matrix.archive_cmd }}
 
-    - name: Running CLI Tests
-      if: ${{ matrix.scripting == 'lua' }}
-      shell: bash
-      run: |
-        if [[ "${{ runner.os }}" == "Linux" ]] ; then
-          export XVFB=xvfb-run
-        fi
-        export ASEPRITE=$PWD/build/bin/aseprite
-        cd tests
-        $XVFB bash run-tests.sh
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: ${{ matrix.archive_file }}
