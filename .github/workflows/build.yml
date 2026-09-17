@@ -105,6 +105,31 @@ jobs:
       run: |
         cd build && ninja aseprite
 
+    - name: Bundle OpenSSL DLLs
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        COPIED=0
+        for dir in "$OPENSSL_ROOT_DIR/bin" "C:/Program Files/OpenSSL/bin" "C:/Program Files/OpenSSL-Win64/bin"; do
+          if [ -d "$dir" ] && ls "$dir"/libcrypto*.dll 1> /dev/null 2>&1; then
+            echo "Found OpenSSL DLLs in $dir"
+            cp -v "$dir"/libcrypto*.dll ./build/bin/
+            cp -v "$dir"/libssl*.dll ./build/bin/ 2>/dev/null || true
+            COPIED=1
+            break
+          fi
+        done
+
+        if [ $COPIED -eq 0 ]; then
+          found=$(find "C:/Program Files" -name "libcrypto-3-x64.dll" 2>/dev/null | head -n 1)
+          if [ -n "$found" ]; then
+            dir=$(dirname "$found")
+            echo "Found OpenSSL DLLs in $dir"
+            cp -v "$dir"/libcrypto*.dll ./build/bin/
+            cp -v "$dir"/libssl*.dll ./build/bin/ 2>/dev/null || true
+          fi
+        fi
+
     - name: Package Binaries
       shell: bash
       run: |
